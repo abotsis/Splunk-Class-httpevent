@@ -76,7 +76,7 @@ class http_event_collector:
         session.mount('https://', adapter)
         return session
 
-    def __init__(self,token,http_event_server,input_type='json',host="",http_event_port='8088',http_event_server_ssl=True):
+    def __init__(self,token,http_event_server,input_type='json',host="",http_event_port='8088',http_event_server_ssl=True,json_serializer=None):
 
         self.log = logging.getLogger(u'HEC')
         self.log.setLevel(logging.INFO)
@@ -93,6 +93,11 @@ class http_event_collector:
         self.input_type = input_type
         self.popNullFields = False 
         self.flushQueue = Queue.Queue(maxsize=self.maxQueueSize)
+        if not json_serializer:
+            self.json_serializer = lambda x:json.dumps(x, default=str)
+        else:
+            self.json_serializer = json_serializer
+        
         for x in range(self.threadCount):
             t = threading.Thread(target=self._batchThread)
             t.daemon = True
@@ -184,7 +189,7 @@ class http_event_collector:
         When the internal queue is exausted, this function _blocks_ until a slot is available.
         """
 
-        if self.input_type == 'json':
+        if self.input_type.startswith('json'):
             # If eventtime in epoch not passed as optional argument and not in payload, use current system time in epoch
             if not eventtime and 'time' not in payload:
                 eventtime = str(round(time.time(),3))
@@ -202,7 +207,12 @@ class http_event_collector:
                 payloadEvent = payload.get('event')
                 payloadEvent = {k:payloadEvent.get(k) for k,v in payloadEvent.items() if v}
                 payload.update({"event":payloadEvent})
-            event.append(json.dumps(payload, default=str))
+            event.append(self.json_serializer(payload))
+        elif self.input_type == 'jsonraw':
+            if self.popNullFields:
+                raise ValueError('Can not pop null fields with jsonraw type')
+                
+            event.append(payload)
         else:
             event.append(str(payload))
 
@@ -218,7 +228,7 @@ class http_event_collector:
         When the internal queue is exausted, this function _blocks_ until a slot is available.
         """
 
-        if self.input_type == 'json':
+        if self.input_type.startswith('json'):
             # Fill in local hostname if not manually populated
             if 'host' not in payload:
                 payload.update({"host":self.host})
@@ -232,7 +242,7 @@ class http_event_collector:
                 payloadEvent = payload.get('event')
                 payloadEvent = {k:payloadEvent.get(k) for k,v in payloadEvent.items() if v}
                 payload.update({"event":payloadEvent})
-            payloadString = json.dumps(payload, default=str)
+            payloadString = self.json_serializer(payload)
 
         else:
             payloadString = str(payload)
